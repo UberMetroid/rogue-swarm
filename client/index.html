@@ -6,32 +6,163 @@
     <title>Rogue Swarm</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #0a0a12; overflow: hidden; }
-        canvas { display: block; }
+        body { background: #0a0a12; overflow: hidden; font-family: monospace; color: white; }
+        canvas { display: block; width: 100vw; height: 100vh; }
         #ui {
-            position: fixed; top: 20px; left: 20px;
-            color: #00ffaa; font-family: monospace;
-            font-size: 18px; text-shadow: 0 0 10px #00ffaa;
+            position: absolute; top: 20px; left: 20px;
+            pointer-events: none; z-index: 10;
+            text-shadow: 0 0 10px #000;
         }
-        #status {
-            position: fixed; bottom: 20px; left: 20px;
-            color: #666; font-family: monospace;
-            font-size: 14px;
+        .text { font-size: 24px; color: #00ffaa; margin-bottom: 5px; }
+        #status-container {
+            position: absolute; bottom: 20px; left: 20px;
+            pointer-events: none; z-index: 10;
+        }
+        #status { font-size: 16px; color: #aaa; text-transform: uppercase; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 32px; color: #00ffaa;
         }
     </style>
 </head>
 <body>
-    <div id="ui">
-        <div id="wave">Wave: 1</div>
-        <div id="score">Score: 0</div>
+    <div id="loading">Loading WASM and Connecting...</div>
+    <div id="ui" style="display: none;">
+        <div id="wave" class="text">Wave: 1</div>
+        <div id="score" class="text">Score: 0</div>
     </div>
-    <div id="status">Connecting...</div>
+    <div id="status-container" style="display: none;">
+        <div id="status">Connecting to Swarm Network...</div>
+    </div>
     <canvas id="canvas"></canvas>
+
     <script type="module">
-        import init from './pkg/client.js';
-        init().then(() => {
-            document.getElementById('status').textContent = 'Game loaded - WASM running';
-        });
+        import init, { update_state, set_player_id, render_frame } from './pkg/client.js';
+
+        async function start() {
+            await init();
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('ui').style.display = 'block';
+            document.getElementById('status-container').style.display = 'block';
+
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Resize handler
+            function resize() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resize);
+            resize();
+
+            // WebSocket connection
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            // In dev mode, hardcode 7903, in prod use host
+            const host = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+                         ? 'localhost:7903' : window.location.host;
+            const ws = new WebSocket(`${protocol}//${host}/ws`);
+            ws.binaryType = 'arraybuffer';
+
+            let playerId = null;
+
+            ws.onopen = () => {
+                console.log("Connected to server");
+                // On connection, server assigns us a player_id implicitly via the ActivePlayer tracking,
+                // but we extract it from the first state broadcast if needed, or just let Rust handle it.
+            };
+
+            ws.onmessage = async (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    const view = new Uint8Array(event.data);
+                    
+                    // Call into WASM to update the Rust state mutex
+                    update_state(view);
+                }
+            };
+
+            // Input tracking
+            const keys = { w: false, a: false, s: false, d: false };
+            let mousePos = { x: 500, y: 500 }; // Default center of 1000x1000 logic map
+            
+            window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+            window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
+            
+            window.addEventListener('mousemove', e => {
+                // Map screen coordinates back to 1000x1000 logic space
+                const scaleX = 1000.0 / canvas.width;
+                const scaleY = 1000.0 / canvas.height;
+                mousePos.x = e.clientX * scaleX;
+                mousePos.y = e.clientY * scaleY;
+            });
+
+            // Input serialization function (simplified JS version for bincode PlayerInput)
+            function sendInput() {
+                if (ws.readyState !== WebSocket.OPEN) return;
+                
+                // Rust PlayerInput struct:
+                // pub carrier_direction: Option<[f32; 2]>,
+                // pub swarm_target: Option<[f32; 2]>,
+                // pub player_id: u64,
+                
+                let dx = 0; let dy = 0;
+                let hasDir = false;
+                
+                if (keys.w) { dy -= 1; hasDir = true; }
+                if (keys.s) { dy += 1; hasDir = true; }
+                if (keys.a) { dx -= 1; hasDir = true; }
+                if (keys.d) { dx += 1; hasDir = true; }
+                
+                // Normalize diagonal movement
+                if (hasDir && dx !== 0 && dy !== 0) {
+                    const len = Math.sqrt(dx*dx + dy*dy);
+                    dx /= len; dy /= len;
+                }
+
+                // Call WASM helper to generate exact bincode bytes for PlayerInput to avoid JS/Rust struct mismatch
+                // (Assuming we added a helper in lib.rs. If not, we can build it manually, but WASM is safer)
+                // We'll just build it manually for now as 25 bytes:
+                // Option tag (1 byte: 1 for Some, 0 for None) + [f32, f32] (8 bytes)
+                // Option tag (1 byte) + [f32, f32] (8 bytes)
+                // u64 (8 bytes)
+                
+                const buffer = new ArrayBuffer(26);
+                const view = new DataView(buffer);
+                
+                let offset = 0;
+                
+                // carrier_direction Option
+                view.setUint8(offset, hasDir ? 1 : 0); offset += 1;
+                if (hasDir) {
+                    view.setFloat32(offset, dx, true); offset += 4;
+                    view.setFloat32(offset, dy, true); offset += 4;
+                }
+                
+                // swarm_target Option (Always true for mouse)
+                view.setUint8(offset, 1); offset += 1;
+                view.setFloat32(offset, mousePos.x, true); offset += 4;
+                view.setFloat32(offset, mousePos.y, true); offset += 4;
+                
+                // player_id (we need to know our ID. For now, assume server accepts active ID if we don't strictly enforce spoofing)
+                // To keep it simple, we let the server handle authentication in a real game.
+                view.setBigUint64(offset, BigInt(0), true); // Temporary 0, server ignores if not active
+                
+                ws.send(buffer);
+            }
+
+            // Input Loop (60Hz)
+            setInterval(sendInput, 16);
+
+            // Render Loop
+            function render() {
+                // Call WASM function to read LATEST_STATE and draw to the canvas 2D context directly
+                render_frame(ctx, canvas.width, canvas.height);
+                requestAnimationFrame(render);
+            }
+            render();
+        }
+
+        start();
     </script>
 </body>
 </html>
