@@ -52,8 +52,8 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    println!("Server running on http://0.0.0.0:8080");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:7903").await.unwrap();
+    println!("Server running on http://0.0.0.0:7903");
 
     axum::serve(listener, app).await.unwrap();
 }

@@ -67,7 +67,7 @@ rouge-swarm/
 ```bash
 cargo build --release -p server
 ./target/release/server
-# Server runs on http://0.0.0.0:8080
+# Server runs on http://0.0.0.0:7903
 ```
 
 ### Client (WASM)
@@ -83,7 +83,7 @@ wasm-pack build --target web -d ../pkg client
 docker build -t rogue-swarm .
 
 # Run
-docker run -p 8080:8080 rogue-swarm
+docker run -p 7903:7903 rogue-swarm
 ```
 
 ## GitHub Actions

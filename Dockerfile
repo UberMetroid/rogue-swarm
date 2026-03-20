@@ -20,6 +20,6 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/target/release/server /usr/local/bin/server
 
-EXPOSE 8080
+EXPOSE 7903
 
 CMD ["server"]
