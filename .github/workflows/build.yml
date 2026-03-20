@@ -79,12 +79,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: rogue-swarm-server
-          path: server/
+          path: docker-context/
+
+      - name: Copy Dockerfile into context
+        run: cp Dockerfile docker-context/
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./docker-context
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/ubermetroid/rogue-swarm:latest
