@@ -1,0 +1,15 @@
+[package]
+name = "client"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+shared = { path = "../shared" }
+bevy = { workspace = true }
+bincode = { workspace = true }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
