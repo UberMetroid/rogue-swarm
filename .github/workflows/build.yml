@@ -87,5 +87,5 @@ jobs:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/rogue-swarm:latest
-            ghcr.io/${{ github.repository_owner }}/rogue-swarm:${{ github.sha }}
+            ghcr.io/ubermetroid/rogue-swarm:latest
+            ghcr.io/ubermetroid/rogue-swarm:${{ github.sha }}
