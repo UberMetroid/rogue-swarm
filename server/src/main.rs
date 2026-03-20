@@ -461,6 +461,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/ws", get(ws_handler))
+        .nest_service("/pkg", tower_http::services::ServeDir::new("/client/pkg"))
         .with_state(game_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:7903").await.unwrap();
@@ -470,7 +471,7 @@ async fn main() {
 }
 
 async fn index_handler() -> impl IntoResponse {
-    match std::fs::read_to_string("client/index.html") {
+    match std::fs::read_to_string("/client/index.html") {
         Ok(html) => (StatusCode::OK, html),
         Err(_) => (StatusCode::NOT_FOUND, "index.html not found".to_string()),
     }

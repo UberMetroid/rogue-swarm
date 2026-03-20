@@ -57,7 +57,7 @@ jobs:
   docker:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: build-server
+    needs: [build-server, build-client-wasm]
     permissions:
       contents: read
       packages: write
@@ -80,6 +80,15 @@ jobs:
         with:
           name: rogue-swarm-server
           path: docker-context/
+
+      - name: Download client WASM
+        uses: actions/download-artifact@v4
+        with:
+          name: client-wasm
+          path: docker-context/client/pkg/
+
+      - name: Copy client HTML into context
+        run: cp client/index.html docker-context/client/
 
       - name: Copy Dockerfile into context
         run: cp Dockerfile docker-context/

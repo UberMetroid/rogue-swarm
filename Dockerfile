@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server /usr/local/bin/server
+COPY client /client
 
 RUN chmod +x /usr/local/bin/server
 
