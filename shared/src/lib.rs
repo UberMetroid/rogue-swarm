@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct BroadcastState {
     pub carrier_pos: [f32; 2],
     pub boid_positions: Vec<[f32; 2]>,
+    pub alien_positions: Vec<[f32; 2]>,
+    pub asteroid_positions: Vec<[f32; 2]>,
     pub wave: u32,
     pub score: u64,
     pub active_player_id: u64,

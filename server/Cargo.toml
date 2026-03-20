@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 shared = { path = "../shared" }
 bevy = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 bincode = { workspace = true }
