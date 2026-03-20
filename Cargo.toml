@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-bevy = "0.15"
+bevy = { version = "0.15", default-features = false }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 tokio-tungstenite = "0.26"
