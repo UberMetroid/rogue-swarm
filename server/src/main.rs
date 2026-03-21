@@ -185,12 +185,20 @@ fn spawner_system(
     }
 }
 
-fn boid_flocking_system(
+
+
+fn ai_and_collision_system(
+    mut commands: Commands,
+    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
     mut boid_query: Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
+    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
+    carrier_query: Query<&Position, With<Carrier>>,
+    mut score: ResMut<Score>,
     swarm_target: Res<SwarmTarget>,
     mut spatial_hash: ResMut<SpatialHash>,
     config: Res<GameConfig>,
 ) {
+    // Boid flocking logic (moved from boid_flocking_system)
     spatial_hash.clear();
     let mut positions = HashMap::new();
     // Copy positions first for the hash map to avoid double mut borrow
@@ -210,7 +218,7 @@ fn boid_flocking_system(
                 let dx = pos.0[0] - npos[0];
                 let dy = pos.0[1] - npos[1];
                 let dist_sq = dx*dx + dy*dy;
-                
+
                 if dist_sq > 0.0 && dist_sq < config.boid_separation_distance.powi(2) {
                     let dist = dist_sq.sqrt();
                     separation[0] += dx / dist;
@@ -226,7 +234,7 @@ fn boid_flocking_system(
             vel.0[0] += separation[0] * 0.2;
             vel.0[1] += separation[1] * 0.2;
         }
-        
+
         let target_dir = [swarm_target.0[0] - pos.0[0], swarm_target.0[1] - pos.0[1]];
         let target_dist = (target_dir[0].powi(2) + target_dir[1].powi(2)).sqrt();
         if target_dist > 0.0 {
@@ -235,27 +243,18 @@ fn boid_flocking_system(
             vel.0[0] += target_dir[0] / target_dist * pull;
             vel.0[1] += target_dir[1] / target_dist * pull;
         }
-        
+
         let speed = (vel.0[0].powi(2) + vel.0[1].powi(2)).sqrt();
         if speed > config.boid_speed {
             vel.0[0] *= config.boid_speed / speed;
             vel.0[1] *= config.boid_speed / speed;
         }
-        
+
         // Move boids
         pos.0[0] += vel.0[0];
         pos.0[1] += vel.0[1];
     }
-}
 
-fn ai_and_collision_system(
-    mut commands: Commands,
-    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
-    boid_query: Query<&Position, With<Boid>>,
-    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
-    carrier_query: Query<&Position, With<Carrier>>,
-    mut score: ResMut<Score>,
-) {
     // Alien AI logic (moved from alien_ai_system)
     if let Ok(carrier_pos) = carrier_query.get_single() {
         for (_, mut apos, mut vel) in alien_query.iter_mut() {
@@ -284,7 +283,7 @@ fn ai_and_collision_system(
 
     // Boids kill Aliens
     for (alien_entity, apos, _) in alien_query.iter() {
-        for bpos in boid_query.iter() {
+        for (_, bpos, _) in boid_query.iter() {
             let dx = bpos.0[0] - apos.0[0];
             let dy = bpos.0[1] - apos.0[1];
             if dx*dx + dy*dy < 100.0 { // 10.0 dist
@@ -297,7 +296,7 @@ fn ai_and_collision_system(
 
     // Boids harvest Asteroids
     for (asteroid_entity, apos) in asteroid_query.iter() {
-        for bpos in boid_query.iter() {
+        for (_, bpos, _) in boid_query.iter() {
             let dx = bpos.0[0] - apos.0[0];
             let dy = bpos.0[1] - apos.0[1];
             if dx*dx + dy*dy < 100.0 {
@@ -432,7 +431,6 @@ async fn main() {
         app.add_systems(Update, player_input_system);
         app.add_systems(Update, carrier_movement_system);
         app.add_systems(Update, spawner_system);
-        app.add_systems(Update, boid_flocking_system);
         app.add_systems(Update, ai_and_collision_system);
         app.add_systems(Update, broadcast_system);
 
@@ -441,7 +439,6 @@ async fn main() {
             player_input_system,
             carrier_movement_system,
             spawner_system,
-            boid_flocking_system,
             ai_and_collision_system,
             broadcast_system,
         ).chain());
