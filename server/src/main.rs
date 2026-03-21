@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use bevy::prelude::*;
 use axum::{
     extract::{
-        ws::{WebSocket, WebSocketUpgrade, Message},
+        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    http::StatusCode,
+    response::IntoResponse,
     routing::get,
     Router,
-    response::IntoResponse,
-    http::StatusCode,
 };
+use bevy::prelude::*;
+use bincode;
 use futures_util::{SinkExt, StreamExt};
 use shared::{BroadcastState, PlayerInput};
-use bincode;
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::{broadcast, mpsc};
 
 #[derive(Resource)]
 struct InputReceiver(pub mpsc::Receiver<PlayerInput>);
@@ -99,12 +99,18 @@ impl SpatialHash {
     }
 
     fn insert(&mut self, entity: Entity, pos: [f32; 2]) {
-        let cell = ((pos[0] / self.cell_size) as i32, (pos[1] / self.cell_size) as i32);
+        let cell = (
+            (pos[0] / self.cell_size) as i32,
+            (pos[1] / self.cell_size) as i32,
+        );
         self.grid.entry(cell).or_insert(Vec::new()).push(entity);
     }
 
     fn get_neighbors(&self, pos: [f32; 2]) -> Vec<Entity> {
-        let cell = ((pos[0] / self.cell_size) as i32, (pos[1] / self.cell_size) as i32);
+        let cell = (
+            (pos[0] / self.cell_size) as i32,
+            (pos[1] / self.cell_size) as i32,
+        );
         let mut neighbors = Vec::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -145,7 +151,7 @@ fn carrier_movement_system(
         pos.0[1] += vel.0[1];
         pos.0[0] = pos.0[0].clamp(0.0, config.map_size);
         pos.0[1] = pos.0[1].clamp(0.0, config.map_size);
-        
+
         // Friction
         vel.0[0] *= 0.96;
         vel.0[1] *= 0.96;
@@ -159,9 +165,13 @@ fn spawner_system(
     carrier_query: Query<&Position, With<Carrier>>,
 ) {
     let now = Instant::now();
-    
+
     // Spawn 1 asteroid every 1 second
-    if now.duration_since(spawner_state.last_asteroid_spawn).as_secs_f32() > 1.0 {
+    if now
+        .duration_since(spawner_state.last_asteroid_spawn)
+        .as_secs_f32()
+        > 1.0
+    {
         spawner_state.last_asteroid_spawn = now;
         let x = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
         let y = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
@@ -169,36 +179,35 @@ fn spawner_system(
     }
 
     // Spawn 1 alien every 2 seconds, slightly away from carrier
-    if now.duration_since(spawner_state.last_alien_spawn).as_secs_f32() > 2.0 {
+    if now
+        .duration_since(spawner_state.last_alien_spawn)
+        .as_secs_f32()
+        > 2.0
+    {
         spawner_state.last_alien_spawn = now;
-        
-        let cpos = carrier_query.get_single().map(|p| p.0).unwrap_or([config.map_size/2.0, config.map_size/2.0]);
+
+        let cpos = carrier_query
+            .get_single()
+            .map(|p| p.0)
+            .unwrap_or([config.map_size / 2.0, config.map_size / 2.0]);
         let angle = rand::random::<f32>() * std::f32::consts::PI * 2.0;
         let dist = 400.0;
-        
+
         let mut ax = cpos[0] + angle.cos() * dist;
         let mut ay = cpos[1] + angle.sin() * dist;
         ax = ax.clamp(0.0, config.map_size);
         ay = ay.clamp(0.0, config.map_size);
-        
+
         commands.spawn((Alien, Position([ax, ay]), Velocity([0.0, 0.0])));
     }
 }
 
-
-
-fn ai_and_collision_system(
-    mut commands: Commands,
-    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+fn boid_movement_system(
     mut boid_query: Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
-    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
-    carrier_query: Query<&Position, With<Carrier>>,
-    mut score: ResMut<Score>,
     swarm_target: Res<SwarmTarget>,
     mut spatial_hash: ResMut<SpatialHash>,
     config: Res<GameConfig>,
 ) {
-    // Boid flocking logic (moved from boid_flocking_system)
     spatial_hash.clear();
     let mut positions = HashMap::new();
     // Copy positions first for the hash map to avoid double mut borrow
@@ -213,11 +222,13 @@ fn ai_and_collision_system(
         let mut count_sep = 0;
 
         for &neighbor in &neighbors {
-            if neighbor == entity { continue; }
+            if neighbor == entity {
+                continue;
+            }
             if let Some(npos) = positions.get(&neighbor) {
                 let dx = pos.0[0] - npos[0];
                 let dy = pos.0[1] - npos[1];
-                let dist_sq = dx*dx + dy*dy;
+                let dist_sq = dx * dx + dy * dy;
 
                 if dist_sq > 0.0 && dist_sq < config.boid_separation_distance.powi(2) {
                     let dist = dist_sq.sqrt();
@@ -254,13 +265,23 @@ fn ai_and_collision_system(
         pos.0[0] += vel.0[0];
         pos.0[1] += vel.0[1];
     }
+}
 
-    // Alien AI logic (moved from alien_ai_system)
+fn alien_and_collision_system(
+    mut commands: Commands,
+    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+    boid_query: Query<(Entity, &Position), With<Boid>>,
+    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
+    carrier_query: Query<&Position, With<Carrier>>,
+    mut score: ResMut<Score>,
+    spatial_hash: Res<SpatialHash>,
+) {
+    // Alien AI logic
     if let Ok(carrier_pos) = carrier_query.get_single() {
         for (_, mut apos, mut vel) in alien_query.iter_mut() {
             let dx = carrier_pos.0[0] - apos.0[0];
             let dy = carrier_pos.0[1] - apos.0[1];
-            let dist = (dx*dx + dy*dy).sqrt();
+            let dist = (dx * dx + dy * dy).sqrt();
             if dist > 0.0 {
                 vel.0[0] += (dx / dist) * 0.02;
                 vel.0[1] += (dy / dist) * 0.02;
@@ -278,17 +299,18 @@ fn ai_and_collision_system(
         }
     }
 
-    // Collision logic (moved from collision_system)
+    // Collision logic
     let mut asteroids_harvested = 0;
 
     // Boids kill Aliens using spatial hash for fast lookups
     for (alien_entity, apos, _) in alien_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
-            if let Ok((_, bpos, _)) = boid_query.get(neighbor_boid) {
+            if let Ok((_, bpos)) = boid_query.get(neighbor_boid) {
                 let dx = bpos.0[0] - apos.0[0];
                 let dy = bpos.0[1] - apos.0[1];
-                if dx*dx + dy*dy < 100.0 { // 10.0 dist
+                if dx * dx + dy * dy < 100.0 {
+                    // 10.0 dist
                     commands.entity(alien_entity).despawn();
                     score.score += 10;
                     break;
@@ -301,10 +323,10 @@ fn ai_and_collision_system(
     for (asteroid_entity, apos) in asteroid_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
-            if let Ok((_, bpos, _)) = boid_query.get(neighbor_boid) {
+            if let Ok((_, bpos)) = boid_query.get(neighbor_boid) {
                 let dx = bpos.0[0] - apos.0[0];
                 let dy = bpos.0[1] - apos.0[1];
-                if dx*dx + dy*dy < 100.0 {
+                if dx * dx + dy * dy < 100.0 {
                     commands.entity(asteroid_entity).despawn();
                     score.score += 5;
                     asteroids_harvested += 1;
@@ -323,7 +345,7 @@ fn ai_and_collision_system(
                 commands.spawn((
                     Boid,
                     Position([cpos.0[0] + dx, cpos.0[1] + dy]),
-                    Velocity([0.0, 0.0])
+                    Velocity([0.0, 0.0]),
                 ));
             }
         }
@@ -332,10 +354,11 @@ fn ai_and_collision_system(
     // Aliens kill Carrier (Game over reset)
     if let Ok(cpos) = carrier_query.get_single() {
         let mut hit = false;
-        for (alien_entity, apos, _) in alien_query.iter() {
+        for (_, apos, _) in alien_query.iter() {
             let dx = cpos.0[0] - apos.0[0];
             let dy = cpos.0[1] - apos.0[1];
-            if dx*dx + dy*dy < 400.0 { // 20.0 dist
+            if dx * dx + dy * dy < 400.0 {
+                // 20.0 dist
                 hit = true;
                 break;
             }
@@ -355,8 +378,6 @@ fn ai_and_collision_system(
     }
 }
 
-
-
 fn broadcast_system(
     boid_query: Query<&Position, With<Boid>>,
     alien_query: Query<&Position, With<Alien>>,
@@ -366,7 +387,10 @@ fn broadcast_system(
     active_player_res: Res<ActivePlayerResource>,
     broadcaster: Res<StateBroadcaster>,
 ) {
-    let carrier_pos = carrier_query.get_single().map(|p| p.0).unwrap_or([500.0, 500.0]);
+    let carrier_pos = carrier_query
+        .get_single()
+        .map(|p| p.0)
+        .unwrap_or([500.0, 500.0]);
     let boid_positions: Vec<[f32; 2]> = boid_query.iter().map(|p| p.0).collect();
     let alien_positions: Vec<[f32; 2]> = alien_query.iter().map(|p| p.0).collect();
     let asteroid_positions: Vec<[f32; 2]> = asteroid_query.iter().map(|p| p.0).collect();
@@ -390,7 +414,7 @@ fn broadcast_system(
 async fn main() {
     let (input_sender, input_receiver) = mpsc::channel(100);
     let (state_broadcaster, _) = broadcast::channel(16);
-    
+
     let active_player_id = Arc::new(Mutex::new(0));
 
     let game_state = Arc::new(GameState {
@@ -423,31 +447,40 @@ async fn main() {
         app.insert_resource(SpatialHash::new(20.0));
         app.insert_resource(ActivePlayerResource(active_player_id));
 
-        app.world_mut().spawn((Carrier, Position([500.0, 500.0]), Velocity([0.0, 0.0])));
-        
+        app.world_mut()
+            .spawn((Carrier, Position([500.0, 500.0]), Velocity([0.0, 0.0])));
+
         // Spawn initial 50 boids
         for _ in 0..50 {
             app.world_mut().spawn((
                 Boid,
-                Position([500.0 + (rand::random::<f32>()-0.5)*100.0, 500.0 + (rand::random::<f32>()-0.5)*100.0]),
-                Velocity([0.0, 0.0])
+                Position([
+                    500.0 + (rand::random::<f32>() - 0.5) * 100.0,
+                    500.0 + (rand::random::<f32>() - 0.5) * 100.0,
+                ]),
+                Velocity([0.0, 0.0]),
             ));
         }
 
         app.add_systems(Update, player_input_system);
         app.add_systems(Update, carrier_movement_system);
         app.add_systems(Update, spawner_system);
-        app.add_systems(Update, ai_and_collision_system);
+        app.add_systems(Update, boid_movement_system);
+        app.add_systems(Update, alien_and_collision_system);
         app.add_systems(Update, broadcast_system);
 
         let mut schedule = Schedule::default();
-        schedule.add_systems((
-            player_input_system,
-            carrier_movement_system,
-            spawner_system,
-            ai_and_collision_system,
-            broadcast_system,
-        ).chain());
+        schedule.add_systems(
+            (
+                player_input_system,
+                carrier_movement_system,
+                spawner_system,
+                boid_movement_system,
+                alien_and_collision_system,
+                broadcast_system,
+            )
+                .chain(),
+        );
 
         loop {
             {
@@ -486,19 +519,19 @@ async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
     let (mut writer, mut reader) = socket.split();
-    
+
     let player_id = {
         let mut counter = state.tick_counter.lock().unwrap();
         let id = *counter;
         *counter += 1;
         state.client_ids.lock().unwrap().push(id);
-        
+
         // If they are the first, make them active
         let mut active = state.active_player_id.lock().unwrap();
         if state.client_ids.lock().unwrap().len() == 1 {
             *active = id;
         }
-        
+
         id
     };
 
@@ -542,7 +575,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<GameState>) {
     }
 
     {
-        state.client_ids.lock().unwrap().retain(|&id| id != player_id);
+        state
+            .client_ids
+            .lock()
+            .unwrap()
+            .retain(|&id| id != player_id);
         if let Ok(mut active) = state.active_player_id.lock() {
             if *active == player_id {
                 if let Some(&next) = state.client_ids.lock().unwrap().first() {

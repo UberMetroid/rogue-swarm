@@ -58,9 +58,34 @@ rouge-swarm/
 
 ### Docker (Recommended)
 
+The easiest way to run the game server is using the pre-built Docker container. The container includes everything needed (the server binary, HTML, and WASM files) and requires no volume mounts for standard play.
+
 ```bash
-docker run -p 7903:7903 ghcr.io/ubermetroid/rogue-swarm:latest
+docker run -d -p 7903:7903 --name rogue-swarm ghcr.io/ubermetroid/rogue-swarm:latest
 # Open http://localhost:7903
+```
+
+#### Running on Unraid / NAS
+
+When configuring the container on Unraid or other Docker UI managers:
+- **Repository:** `ghcr.io/ubermetroid/rogue-swarm:latest`
+- **Network Type:** Bridge
+- **Port mapping:** Host `7903` to Container `7903` (TCP)
+- **Volumes:** None required for the standard game.
+
+#### Local Development with Docker
+
+If you are modifying the WASM client locally and want to test it using the Docker server without rebuilding the entire image, you can bind-mount your local directories into the container:
+
+```bash
+# 1. Build the WASM client locally first
+wasm-pack build --target web -d ../pkg client
+
+# 2. Run the Docker container, mounting your local files over the container's files
+docker run -p 7903:7903 \
+  -v $(pwd)/client/index.html:/client/index.html:ro \
+  -v $(pwd)/pkg:/client/pkg:ro \
+  ghcr.io/ubermetroid/rogue-swarm:latest
 ```
 
 ### From Source
