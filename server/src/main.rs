@@ -204,8 +204,10 @@ fn spawner_system(
 
 fn boid_and_alien_system(
     mut commands: Commands,
-    mut boid_query: Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
-    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+    mut query_set: ParamSet<(
+        Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
+        Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+    )>,
     asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
     carrier_query: Query<&Position, With<Carrier>>,
     mut score: ResMut<Score>,
@@ -216,68 +218,71 @@ fn boid_and_alien_system(
     spatial_hash.clear();
     let mut positions = HashMap::new();
 
-    // 1. Immutable pass: collect ALL boid positions for spatial hash and neighbor lookups
-    for (entity, pos, _) in boid_query.iter() {
-        spatial_hash.insert(entity, pos.0);
-        positions.insert(entity, pos.0);
+    // Phase 1: Boid immutable pass - collect positions into HashMap
+    {
+        let boid_query = query_set.p0();
+        for (entity, pos, _) in boid_query.iter() {
+            spatial_hash.insert(entity, pos.0);
+            positions.insert(entity, pos.0);
+        }
     }
 
-    // 2. Mutable pass: Boid flocking & movement
-    for (entity, mut pos, mut vel) in boid_query.iter_mut() {
-        let neighbors = spatial_hash.get_neighbors(pos.0);
-        let mut separation = [0.0, 0.0];
-        let mut count_sep = 0;
+    // Phase 2: Boid mutable movement
+    {
+        let mut boid_query = query_set.p0();
+        for (entity, mut pos, mut vel) in boid_query.iter_mut() {
+            let neighbors = spatial_hash.get_neighbors(pos.0);
+            let mut separation = [0.0, 0.0];
+            let mut count_sep = 0;
 
-        for &neighbor in &neighbors {
-            if neighbor == entity {
-                continue;
-            }
-            if let Some(npos) = positions.get(&neighbor) {
-                let dx = pos.0[0] - npos[0];
-                let dy = pos.0[1] - npos[1];
-                let dist_sq = dx * dx + dy * dy;
+            for &neighbor in &neighbors {
+                if neighbor == entity {
+                    continue;
+                }
+                if let Some(npos) = positions.get(&neighbor) {
+                    let dx = pos.0[0] - npos[0];
+                    let dy = pos.0[1] - npos[1];
+                    let dist_sq = dx * dx + dy * dy;
 
-                if dist_sq > 0.0 && dist_sq < config.boid_separation_distance.powi(2) {
-                    let dist = dist_sq.sqrt();
-                    separation[0] += dx / dist;
-                    separation[1] += dy / dist;
-                    count_sep += 1;
+                    if dist_sq > 0.0 && dist_sq < config.boid_separation_distance.powi(2) {
+                        let dist = dist_sq.sqrt();
+                        separation[0] += dx / dist;
+                        separation[1] += dy / dist;
+                        count_sep += 1;
+                    }
                 }
             }
+
+            if count_sep > 0 {
+                separation[0] /= count_sep as f32;
+                separation[1] /= count_sep as f32;
+                vel.0[0] += separation[0] * 0.2;
+                vel.0[1] += separation[1] * 0.2;
+            }
+
+            let target_dir = [swarm_target.0[0] - pos.0[0], swarm_target.0[1] - pos.0[1]];
+            let target_dist = (target_dir[0].powi(2) + target_dir[1].powi(2)).sqrt();
+            if target_dist > 0.0 {
+                let pull = if target_dist > 200.0 { 0.15 } else { 0.05 };
+                vel.0[0] += target_dir[0] / target_dist * pull;
+                vel.0[1] += target_dir[1] / target_dist * pull;
+            }
+
+            let speed = (vel.0[0].powi(2) + vel.0[1].powi(2)).sqrt();
+            if speed > config.boid_speed {
+                vel.0[0] *= config.boid_speed / speed;
+                vel.0[1] *= config.boid_speed / speed;
+            }
+
+            pos.0[0] += vel.0[0];
+            pos.0[1] += vel.0[1];
+            positions.insert(entity, pos.0);
         }
-
-        if count_sep > 0 {
-            separation[0] /= count_sep as f32;
-            separation[1] /= count_sep as f32;
-            vel.0[0] += separation[0] * 0.2;
-            vel.0[1] += separation[1] * 0.2;
-        }
-
-        let target_dir = [swarm_target.0[0] - pos.0[0], swarm_target.0[1] - pos.0[1]];
-        let target_dist = (target_dir[0].powi(2) + target_dir[1].powi(2)).sqrt();
-        if target_dist > 0.0 {
-            // Speed up significantly if far away
-            let pull = if target_dist > 200.0 { 0.15 } else { 0.05 };
-            vel.0[0] += target_dir[0] / target_dist * pull;
-            vel.0[1] += target_dir[1] / target_dist * pull;
-        }
-
-        let speed = (vel.0[0].powi(2) + vel.0[1].powi(2)).sqrt();
-        if speed > config.boid_speed {
-            vel.0[0] *= config.boid_speed / speed;
-            vel.0[1] *= config.boid_speed / speed;
-        }
-
-        // Move boids
-        pos.0[0] += vel.0[0];
-        pos.0[1] += vel.0[1];
-
-        // Update the hashmap with the NEW position so collisions this frame are accurate
-        positions.insert(entity, pos.0);
     }
 
-    // 3. Mutable pass: Alien AI logic
+    // Phase 3: Alien mutable movement
     if let Ok(carrier_pos) = carrier_query.get_single() {
+        let mut alien_query = query_set.p1();
         for (_, mut apos, mut vel) in alien_query.iter_mut() {
             let dx = carrier_pos.0[0] - apos.0[0];
             let dy = carrier_pos.0[1] - apos.0[1];
@@ -286,7 +291,6 @@ fn boid_and_alien_system(
                 vel.0[0] += (dx / dist) * 0.02;
                 vel.0[1] += (dy / dist) * 0.02;
 
-                // Max speed
                 let speed = (vel.0[0].powi(2) + vel.0[1].powi(2)).sqrt();
                 if speed > 1.0 {
                     vel.0[0] *= 1.0 / speed;
@@ -299,29 +303,29 @@ fn boid_and_alien_system(
         }
     }
 
-    // 4. Collision logic
+    // Phase 4: Collision detection (uses HashMap for boid positions, not a query)
     let mut asteroids_harvested = 0;
 
-    // Boids kill Aliens using spatial hash for fast lookups
-    for (alien_entity, apos, _) in alien_query.iter() {
-        let neighbors = spatial_hash.get_neighbors(apos.0);
-        for &neighbor_boid in &neighbors {
-            // Instead of querying boid_query, we use our immutable `positions` hashmap!
-            // This prevents the B0001 error completely.
-            if let Some(bpos) = positions.get(&neighbor_boid) {
-                let dx = bpos[0] - apos.0[0];
-                let dy = bpos[1] - apos.0[1];
-                if dx * dx + dy * dy < 100.0 {
-                    // 10.0 dist
-                    commands.entity(alien_entity).despawn();
-                    score.score += 10;
-                    break;
+    // Boids kill Aliens
+    {
+        let alien_query = query_set.p1();
+        for (alien_entity, apos, _) in alien_query.iter() {
+            let neighbors = spatial_hash.get_neighbors(apos.0);
+            for &neighbor_boid in &neighbors {
+                if let Some(bpos) = positions.get(&neighbor_boid) {
+                    let dx = bpos[0] - apos.0[0];
+                    let dy = bpos[1] - apos.0[1];
+                    if dx * dx + dy * dy < 100.0 {
+                        commands.entity(alien_entity).despawn();
+                        score.score += 10;
+                        break;
+                    }
                 }
             }
         }
     }
 
-    // Boids harvest Asteroids using spatial hash
+    // Boids harvest Asteroids
     for (asteroid_entity, apos) in asteroid_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
@@ -338,7 +342,7 @@ fn boid_and_alien_system(
         }
     }
 
-    // Spawn 2 boids per harvested asteroid around carrier
+    // Spawn 2 boids per harvested asteroid
     if asteroids_harvested > 0 {
         if let Ok(cpos) = carrier_query.get_single() {
             for _ in 0..(asteroids_harvested * 2) {
@@ -353,26 +357,27 @@ fn boid_and_alien_system(
         }
     }
 
-    // Aliens kill Carrier (Game over reset)
+    // Aliens kill Carrier (Game over)
     if let Ok(cpos) = carrier_query.get_single() {
         let mut hit = false;
-        for (_, apos, _) in alien_query.iter() {
-            let dx = cpos.0[0] - apos.0[0];
-            let dy = cpos.0[1] - apos.0[1];
-            if dx * dx + dy * dy < 400.0 {
-                // 20.0 dist
-                hit = true;
-                break;
+        {
+            let alien_query = query_set.p1();
+            for (_, apos, _) in alien_query.iter() {
+                let dx = cpos.0[0] - apos.0[0];
+                let dy = cpos.0[1] - apos.0[1];
+                if dx * dx + dy * dy < 400.0 {
+                    hit = true;
+                    break;
+                }
             }
         }
 
         if hit {
             println!("CARRIER DESTROYED! Game Over.");
-            // Next tick, game will be handled by UI, but here we just reset score
             score.score = 0;
             score.wave = 1;
 
-            // Kill all aliens
+            let alien_query = query_set.p1();
             for (alien_entity, _, _) in alien_query.iter() {
                 commands.entity(alien_entity).despawn();
             }
