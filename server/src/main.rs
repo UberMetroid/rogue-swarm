@@ -281,37 +281,43 @@ fn ai_and_collision_system(
     // Collision logic (moved from collision_system)
     let mut asteroids_harvested = 0;
 
-    // Boids kill Aliens
+    // Boids kill Aliens using spatial hash for fast lookups
     for (alien_entity, apos, _) in alien_query.iter() {
-        for (_, bpos, _) in boid_query.iter() {
-            let dx = bpos.0[0] - apos.0[0];
-            let dy = bpos.0[1] - apos.0[1];
-            if dx*dx + dy*dy < 100.0 { // 10.0 dist
-                commands.entity(alien_entity).despawn();
-                score.score += 10;
-                break;
+        let neighbors = spatial_hash.get_neighbors(apos.0);
+        for &neighbor_boid in &neighbors {
+            if let Ok((_, bpos, _)) = boid_query.get(neighbor_boid) {
+                let dx = bpos.0[0] - apos.0[0];
+                let dy = bpos.0[1] - apos.0[1];
+                if dx*dx + dy*dy < 100.0 { // 10.0 dist
+                    commands.entity(alien_entity).despawn();
+                    score.score += 10;
+                    break;
+                }
             }
         }
     }
 
-    // Boids harvest Asteroids
+    // Boids harvest Asteroids using spatial hash
     for (asteroid_entity, apos) in asteroid_query.iter() {
-        for (_, bpos, _) in boid_query.iter() {
-            let dx = bpos.0[0] - apos.0[0];
-            let dy = bpos.0[1] - apos.0[1];
-            if dx*dx + dy*dy < 100.0 {
-                commands.entity(asteroid_entity).despawn();
-                score.score += 5;
-                asteroids_harvested += 1;
-                break;
+        let neighbors = spatial_hash.get_neighbors(apos.0);
+        for &neighbor_boid in &neighbors {
+            if let Ok((_, bpos, _)) = boid_query.get(neighbor_boid) {
+                let dx = bpos.0[0] - apos.0[0];
+                let dy = bpos.0[1] - apos.0[1];
+                if dx*dx + dy*dy < 100.0 {
+                    commands.entity(asteroid_entity).despawn();
+                    score.score += 5;
+                    asteroids_harvested += 1;
+                    break;
+                }
             }
         }
     }
 
-    // Spawn 10 boids per harvested asteroid around carrier
+    // Spawn 2 boids per harvested asteroid around carrier
     if asteroids_harvested > 0 {
         if let Ok(cpos) = carrier_query.get_single() {
-            for _ in 0..(asteroids_harvested * 10) {
+            for _ in 0..(asteroids_harvested * 2) {
                 let dx = (rand::random::<f32>() - 0.5) * 20.0;
                 let dy = (rand::random::<f32>() - 0.5) * 20.0;
                 commands.spawn((
@@ -419,8 +425,8 @@ async fn main() {
 
         app.world_mut().spawn((Carrier, Position([500.0, 500.0]), Velocity([0.0, 0.0])));
         
-        // Spawn initial 100 boids
-        for _ in 0..100 {
+        // Spawn initial 50 boids
+        for _ in 0..50 {
             app.world_mut().spawn((
                 Boid,
                 Position([500.0 + (rand::random::<f32>()-0.5)*100.0, 500.0 + (rand::random::<f32>()-0.5)*100.0]),
