@@ -142,71 +142,12 @@ fn player_input_system(
     }
 }
 
-fn carrier_movement_system(
-    mut carrier_query: Query<(&mut Position, &mut Velocity), With<Carrier>>,
-    config: Res<GameConfig>,
-) {
-    if let Ok((mut pos, mut vel)) = carrier_query.get_single_mut() {
-        pos.0[0] += vel.0[0];
-        pos.0[1] += vel.0[1];
-        pos.0[0] = pos.0[0].clamp(0.0, config.map_size);
-        pos.0[1] = pos.0[1].clamp(0.0, config.map_size);
-
-        // Friction
-        vel.0[0] *= 0.96;
-        vel.0[1] *= 0.96;
-    }
-}
-
-fn spawner_system(
-    mut commands: Commands,
-    mut spawner_state: ResMut<SpawnerState>,
-    config: Res<GameConfig>,
-    carrier_query: Query<&Position, With<Carrier>>,
-) {
-    let now = Instant::now();
-
-    // Spawn 1 asteroid every 1 second
-    if now
-        .duration_since(spawner_state.last_asteroid_spawn)
-        .as_secs_f32()
-        > 1.0
-    {
-        spawner_state.last_asteroid_spawn = now;
-        let x = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
-        let y = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
-        commands.spawn((Asteroid, Position([x, y])));
-    }
-
-    // Spawn 1 alien every 2 seconds, slightly away from carrier
-    if now
-        .duration_since(spawner_state.last_alien_spawn)
-        .as_secs_f32()
-        > 2.0
-    {
-        spawner_state.last_alien_spawn = now;
-
-        let cpos = carrier_query
-            .get_single()
-            .map(|p| p.0)
-            .unwrap_or([config.map_size / 2.0, config.map_size / 2.0]);
-        let angle = rand::random::<f32>() * std::f32::consts::PI * 2.0;
-        let dist = 400.0;
-
-        let mut ax = cpos[0] + angle.cos() * dist;
-        let mut ay = cpos[1] + angle.sin() * dist;
-        ax = ax.clamp(0.0, config.map_size);
-        ay = ay.clamp(0.0, config.map_size);
-
-        commands.spawn((Alien, Position([ax, ay]), Velocity([0.0, 0.0])));
-    }
-}
-
 fn boid_and_alien_system(
     mut commands: Commands,
     mut query_set: ParamSet<(
         Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
         Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+        Query<(&mut Position, &mut Velocity), With<Carrier>>,
     )>,
     asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
     carrier_query: Query<&Position, With<Carrier>>,
@@ -214,7 +155,23 @@ fn boid_and_alien_system(
     swarm_target: Res<SwarmTarget>,
     mut spatial_hash: ResMut<SpatialHash>,
     config: Res<GameConfig>,
+    mut spawner_state: ResMut<SpawnerState>,
 ) {
+    // Phase 0: Carrier movement
+    {
+        let mut carrier_query = query_set.p2();
+        if let Ok((mut pos, mut vel)) = carrier_query.get_single_mut() {
+            pos.0[0] += vel.0[0];
+            pos.0[1] += vel.0[1];
+            pos.0[0] = pos.0[0].clamp(0.0, config.map_size);
+            pos.0[1] = pos.0[1].clamp(0.0, config.map_size);
+
+            // Friction
+            vel.0[0] *= 0.96;
+            vel.0[1] *= 0.96;
+        }
+    }
+
     spatial_hash.clear();
     let mut positions = HashMap::new();
 
@@ -321,6 +278,44 @@ fn boid_and_alien_system(
                         break;
                     }
                 }
+            }
+
+            // Phase 7: Spawner system
+            let now = Instant::now();
+
+            // Spawn 1 asteroid every 1 second
+            if now
+                .duration_since(spawner_state.last_asteroid_spawn)
+                .as_secs_f32()
+                > 1.0
+            {
+                spawner_state.last_asteroid_spawn = now;
+                let x = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
+                let y = (rand::random::<f32>() * 0.8 + 0.1) * config.map_size;
+                commands.spawn((Asteroid, Position([x, y])));
+            }
+
+            // Spawn 1 alien every 2 seconds, slightly away from carrier
+            if now
+                .duration_since(spawner_state.last_alien_spawn)
+                .as_secs_f32()
+                > 2.0
+            {
+                spawner_state.last_alien_spawn = now;
+
+                let cpos = carrier_query
+                    .get_single()
+                    .map(|p| p.0)
+                    .unwrap_or([config.map_size / 2.0, config.map_size / 2.0]);
+                let angle = rand::random::<f32>() * std::f32::consts::PI * 2.0;
+                let dist = 400.0;
+
+                let mut ax = cpos[0] + angle.cos() * dist;
+                let mut ay = cpos[1] + angle.sin() * dist;
+                ax = ax.clamp(0.0, config.map_size);
+                ay = ay.clamp(0.0, config.map_size);
+
+                commands.spawn((Alien, Position([ax, ay]), Velocity([0.0, 0.0])));
             }
         }
     }
@@ -470,22 +465,12 @@ async fn main() {
         }
 
         app.add_systems(Update, player_input_system);
-        app.add_systems(Update, carrier_movement_system);
-        app.add_systems(Update, spawner_system);
         app.add_systems(Update, boid_and_alien_system);
         app.add_systems(Update, broadcast_system);
 
         let mut schedule = Schedule::default();
-        schedule.add_systems(
-            (
-                player_input_system,
-                carrier_movement_system,
-                spawner_system,
-                boid_and_alien_system,
-                broadcast_system,
-            )
-                .chain(),
-        );
+        schedule
+            .add_systems((player_input_system, boid_and_alien_system, broadcast_system).chain());
 
         loop {
             {
