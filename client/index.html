@@ -37,7 +37,29 @@
     <canvas id="canvas"></canvas>
 
     <script type="module">
-        import init, { update_state, set_player_id, render_frame } from './pkg/client.js';
+        console.log("JavaScript is executing!");
+
+        let init, update_state, render_frame;
+
+        try {
+            const module = await import('./pkg/client.js');
+            init = module.init;
+            update_state = module.update_state;
+            render_frame = module.render_frame;
+            console.log("WASM imported successfully");
+        } catch (error) {
+            console.error("WASM import failed:", error);
+
+            // Fallback: static canvas rendering
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'red';
+            ctx.fillRect(10, 10, 100, 100);
+            ctx.fillStyle = 'white';
+            ctx.fillText("WASM FAILED - STATIC FALLBACK", 10, 30);
+            console.log("Static fallback rendering active");
+            return;
+        }
 
         async function start() {
             await init();
