@@ -205,7 +205,7 @@ fn spawner_system(
 fn boid_and_alien_system(
     mut commands: Commands,
     mut boid_query: Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
-    mut alien_query: Query<(Entity, &mut Position, &mut Velocity, Option<&Boid>), With<Alien>>,
+    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
     asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
     carrier_query: Query<&Position, With<Carrier>>,
     mut score: ResMut<Score>,
@@ -278,9 +278,7 @@ fn boid_and_alien_system(
 
     // 3. Mutable pass: Alien AI logic
     if let Ok(carrier_pos) = carrier_query.get_single() {
-        // We use alien_query mutably here. It is safe because it only accesses With<Alien>
-        // and does NOT touch Boid components.
-        for (_, mut apos, mut vel, _) in alien_query.iter_mut() {
+        for (_, mut apos, mut vel) in alien_query.iter_mut() {
             let dx = carrier_pos.0[0] - apos.0[0];
             let dy = carrier_pos.0[1] - apos.0[1];
             let dist = (dx * dx + dy * dy).sqrt();
@@ -305,8 +303,7 @@ fn boid_and_alien_system(
     let mut asteroids_harvested = 0;
 
     // Boids kill Aliens using spatial hash for fast lookups
-    // We iterate aliens IMMUTABLY here.
-    for (alien_entity, apos, _, _) in alien_query.iter() {
+    for (alien_entity, apos, _) in alien_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
             // Instead of querying boid_query, we use our immutable `positions` hashmap!
@@ -359,7 +356,7 @@ fn boid_and_alien_system(
     // Aliens kill Carrier (Game over reset)
     if let Ok(cpos) = carrier_query.get_single() {
         let mut hit = false;
-        for (_, apos, _, _) in alien_query.iter() {
+        for (_, apos, _) in alien_query.iter() {
             let dx = cpos.0[0] - apos.0[0];
             let dy = cpos.0[1] - apos.0[1];
             if dx * dx + dy * dy < 400.0 {
@@ -376,7 +373,7 @@ fn boid_and_alien_system(
             score.wave = 1;
 
             // Kill all aliens
-            for (alien_entity, _, _, _) in alien_query.iter() {
+            for (alien_entity, _, _) in alien_query.iter() {
                 commands.entity(alien_entity).despawn();
             }
         }
