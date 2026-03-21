@@ -202,20 +202,27 @@ fn spawner_system(
     }
 }
 
-fn boid_movement_system(
+fn boid_and_alien_system(
+    mut commands: Commands,
     mut boid_query: Query<(Entity, &mut Position, &mut Velocity), With<Boid>>,
+    mut alien_query: Query<(Entity, &mut Position, &mut Velocity, Option<&Boid>), With<Alien>>,
+    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
+    carrier_query: Query<&Position, With<Carrier>>,
+    mut score: ResMut<Score>,
     swarm_target: Res<SwarmTarget>,
     mut spatial_hash: ResMut<SpatialHash>,
     config: Res<GameConfig>,
 ) {
     spatial_hash.clear();
     let mut positions = HashMap::new();
-    // Copy positions first for the hash map to avoid double mut borrow
+
+    // 1. Immutable pass: collect ALL boid positions for spatial hash and neighbor lookups
     for (entity, pos, _) in boid_query.iter() {
         spatial_hash.insert(entity, pos.0);
         positions.insert(entity, pos.0);
     }
 
+    // 2. Mutable pass: Boid flocking & movement
     for (entity, mut pos, mut vel) in boid_query.iter_mut() {
         let neighbors = spatial_hash.get_neighbors(pos.0);
         let mut separation = [0.0, 0.0];
@@ -264,21 +271,16 @@ fn boid_movement_system(
         // Move boids
         pos.0[0] += vel.0[0];
         pos.0[1] += vel.0[1];
-    }
-}
 
-fn alien_and_collision_system(
-    mut commands: Commands,
-    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
-    boid_query: Query<(Entity, &Position), With<Boid>>,
-    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
-    carrier_query: Query<&Position, With<Carrier>>,
-    mut score: ResMut<Score>,
-    spatial_hash: Res<SpatialHash>,
-) {
-    // Alien AI logic
+        // Update the hashmap with the NEW position so collisions this frame are accurate
+        positions.insert(entity, pos.0);
+    }
+
+    // 3. Mutable pass: Alien AI logic
     if let Ok(carrier_pos) = carrier_query.get_single() {
-        for (_, mut apos, mut vel) in alien_query.iter_mut() {
+        // We use alien_query mutably here. It is safe because it only accesses With<Alien>
+        // and does NOT touch Boid components.
+        for (_, mut apos, mut vel, _) in alien_query.iter_mut() {
             let dx = carrier_pos.0[0] - apos.0[0];
             let dy = carrier_pos.0[1] - apos.0[1];
             let dist = (dx * dx + dy * dy).sqrt();
@@ -299,16 +301,19 @@ fn alien_and_collision_system(
         }
     }
 
-    // Collision logic
+    // 4. Collision logic
     let mut asteroids_harvested = 0;
 
     // Boids kill Aliens using spatial hash for fast lookups
-    for (alien_entity, apos, _) in alien_query.iter() {
+    // We iterate aliens IMMUTABLY here.
+    for (alien_entity, apos, _, _) in alien_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
-            if let Ok((_, bpos)) = boid_query.get(neighbor_boid) {
-                let dx = bpos.0[0] - apos.0[0];
-                let dy = bpos.0[1] - apos.0[1];
+            // Instead of querying boid_query, we use our immutable `positions` hashmap!
+            // This prevents the B0001 error completely.
+            if let Some(bpos) = positions.get(&neighbor_boid) {
+                let dx = bpos[0] - apos.0[0];
+                let dy = bpos[1] - apos.0[1];
                 if dx * dx + dy * dy < 100.0 {
                     // 10.0 dist
                     commands.entity(alien_entity).despawn();
@@ -323,9 +328,9 @@ fn alien_and_collision_system(
     for (asteroid_entity, apos) in asteroid_query.iter() {
         let neighbors = spatial_hash.get_neighbors(apos.0);
         for &neighbor_boid in &neighbors {
-            if let Ok((_, bpos)) = boid_query.get(neighbor_boid) {
-                let dx = bpos.0[0] - apos.0[0];
-                let dy = bpos.0[1] - apos.0[1];
+            if let Some(bpos) = positions.get(&neighbor_boid) {
+                let dx = bpos[0] - apos.0[0];
+                let dy = bpos[1] - apos.0[1];
                 if dx * dx + dy * dy < 100.0 {
                     commands.entity(asteroid_entity).despawn();
                     score.score += 5;
@@ -354,7 +359,7 @@ fn alien_and_collision_system(
     // Aliens kill Carrier (Game over reset)
     if let Ok(cpos) = carrier_query.get_single() {
         let mut hit = false;
-        for (_, apos, _) in alien_query.iter() {
+        for (_, apos, _, _) in alien_query.iter() {
             let dx = cpos.0[0] - apos.0[0];
             let dy = cpos.0[1] - apos.0[1];
             if dx * dx + dy * dy < 400.0 {
@@ -371,7 +376,7 @@ fn alien_and_collision_system(
             score.wave = 1;
 
             // Kill all aliens
-            for (alien_entity, _, _) in alien_query.iter() {
+            for (alien_entity, _, _, _) in alien_query.iter() {
                 commands.entity(alien_entity).despawn();
             }
         }
@@ -465,8 +470,7 @@ async fn main() {
         app.add_systems(Update, player_input_system);
         app.add_systems(Update, carrier_movement_system);
         app.add_systems(Update, spawner_system);
-        app.add_systems(Update, boid_movement_system);
-        app.add_systems(Update, alien_and_collision_system);
+        app.add_systems(Update, boid_and_alien_system);
         app.add_systems(Update, broadcast_system);
 
         let mut schedule = Schedule::default();
@@ -475,8 +479,7 @@ async fn main() {
                 player_input_system,
                 carrier_movement_system,
                 spawner_system,
-                boid_movement_system,
-                alien_and_collision_system,
+                boid_and_alien_system,
                 broadcast_system,
             )
                 .chain(),
