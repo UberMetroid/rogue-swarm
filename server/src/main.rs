@@ -248,19 +248,24 @@ fn boid_flocking_system(
     }
 }
 
-fn alien_ai_system(
-    mut alien_query: Query<(&mut Position, &mut Velocity), With<Alien>>,
+fn ai_and_collision_system(
+    mut commands: Commands,
+    mut alien_query: Query<(Entity, &mut Position, &mut Velocity), With<Alien>>,
+    boid_query: Query<&Position, With<Boid>>,
+    asteroid_query: Query<(Entity, &Position), With<Asteroid>>,
     carrier_query: Query<&Position, With<Carrier>>,
+    mut score: ResMut<Score>,
 ) {
+    // Alien AI logic (moved from alien_ai_system)
     if let Ok(carrier_pos) = carrier_query.get_single() {
-        for (mut apos, mut vel) in alien_query.iter_mut() {
+        for (_, mut apos, mut vel) in alien_query.iter_mut() {
             let dx = carrier_pos.0[0] - apos.0[0];
             let dy = carrier_pos.0[1] - apos.0[1];
             let dist = (dx*dx + dy*dy).sqrt();
             if dist > 0.0 {
                 vel.0[0] += (dx / dist) * 0.02;
                 vel.0[1] += (dy / dist) * 0.02;
-                
+
                 // Max speed
                 let speed = (vel.0[0].powi(2) + vel.0[1].powi(2)).sqrt();
                 if speed > 1.0 {
@@ -268,25 +273,17 @@ fn alien_ai_system(
                     vel.0[1] *= 1.0 / speed;
                 }
             }
-            
+
             apos.0[0] += vel.0[0];
             apos.0[1] += vel.0[1];
         }
     }
-}
 
-fn collision_system(
-    mut commands: Commands,
-    boid_query: Query<&Position, With<Boid>>,
-    alien_query: Query<(Entity, &Position), (With<Alien>, Without<Boid>)>,
-    asteroid_query: Query<(Entity, &Position), (With<Asteroid>, Without<Boid>, Without<Alien>)>,
-    carrier_query: Query<&Position, With<Carrier>>,
-    mut score: ResMut<Score>,
-) {
+    // Collision logic (moved from collision_system)
     let mut asteroids_harvested = 0;
-    
+
     // Boids kill Aliens
-    for (alien_entity, apos) in alien_query.iter() {
+    for (alien_entity, apos, _) in alien_query.iter() {
         for bpos in boid_query.iter() {
             let dx = bpos.0[0] - apos.0[0];
             let dy = bpos.0[1] - apos.0[1];
@@ -311,7 +308,7 @@ fn collision_system(
             }
         }
     }
-    
+
     // Spawn 10 boids per harvested asteroid around carrier
     if asteroids_harvested > 0 {
         if let Ok(cpos) = carrier_query.get_single() {
@@ -330,7 +327,7 @@ fn collision_system(
     // Aliens kill Carrier (Game over reset)
     if let Ok(cpos) = carrier_query.get_single() {
         let mut hit = false;
-        for (_, apos) in alien_query.iter() {
+        for (alien_entity, apos, _) in alien_query.iter() {
             let dx = cpos.0[0] - apos.0[0];
             let dy = cpos.0[1] - apos.0[1];
             if dx*dx + dy*dy < 400.0 { // 20.0 dist
@@ -338,20 +335,22 @@ fn collision_system(
                 break;
             }
         }
-        
+
         if hit {
             println!("CARRIER DESTROYED! Game Over.");
             // Next tick, game will be handled by UI, but here we just reset score
             score.score = 0;
             score.wave = 1;
-            
+
             // Kill all aliens
-            for (alien, _) in alien_query.iter() {
-                commands.entity(alien).despawn();
+            for (alien_entity, _, _) in alien_query.iter() {
+                commands.entity(alien_entity).despawn();
             }
         }
     }
 }
+
+
 
 fn broadcast_system(
     boid_query: Query<&Position, With<Boid>>,
@@ -434,8 +433,7 @@ async fn main() {
         app.add_systems(Update, carrier_movement_system);
         app.add_systems(Update, spawner_system);
         app.add_systems(Update, boid_flocking_system);
-        app.add_systems(Update, alien_ai_system);
-        app.add_systems(Update, collision_system);
+        app.add_systems(Update, ai_and_collision_system);
         app.add_systems(Update, broadcast_system);
 
         let mut schedule = Schedule::default();
@@ -444,8 +442,7 @@ async fn main() {
             carrier_movement_system,
             spawner_system,
             boid_flocking_system,
-            alien_ai_system,
-            collision_system,
+            ai_and_collision_system,
             broadcast_system,
         ).chain());
 
